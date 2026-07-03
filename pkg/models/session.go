@@ -21,6 +21,7 @@ type Session struct {
 	UserAgent    *string         `json:"user_agent" gorm:"type:text"`
 	IP           *string         `json:"ip" gorm:"type:varchar(255)"`
 	Tag          *string         `json:"tag" gorm:"type:varchar(255)"`
+	SessionMeta  JSON            `json:"session_meta,omitempty" gorm:"column:session_meta"`
 	InstanceId   string          `json:"instance_id" gorm:"type:varchar(255)"`
 
 	// Relationships

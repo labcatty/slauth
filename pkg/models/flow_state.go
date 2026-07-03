@@ -16,6 +16,7 @@ type FlowState struct {
 	ProviderRefreshToken *string    `json:"provider_refresh_token" gorm:"type:varchar(255)"`
 	RedirectURI          string     `json:"redirect_uri" gorm:"type:varchar(500)"`
 	RedirectTo           string     `json:"redirect_to" gorm:"type:varchar(500)"`
+	Meta                 JSON       `json:"meta,omitempty" gorm:"column:meta"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 	AuthenticationMethod string     `json:"authentication_method" gorm:"type:varchar(255);not null"`
