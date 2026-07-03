@@ -84,5 +84,6 @@ type AuthService interface {
 const SessionTagWeb = "web"
 
 type SessionOptions struct {
-	Tag string
+	Tag         string
+	SessionMeta map[string]any
 }

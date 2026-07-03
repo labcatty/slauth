@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -25,6 +26,7 @@ type JWTClaims struct {
 	Email      string         `json:"email,omitempty"`
 	Phone      string         `json:"phone,omitempty"`
 	Role       string         `json:"role,omitempty"`
+	Scope      string         `json:"scope,omitempty"`
 	AAL        types.AALLevel `json:"aal"`
 	AMR        []string       `json:"amr"` // Authentication Method Reference
 	SessionID  uint           `json:"session_id"`
@@ -143,7 +145,7 @@ func NewJWTService(getSecrets func() *types.InstanceSecrets, getAccessTokenTTL, 
 }
 
 // GenerateAccessToken generates a new access token
-func (j *JWTService) GenerateAccessToken(userID string, instanceId, email, phone, role string, aal types.AALLevel, amr []string, sessionID uint, userMeta, appMeta map[string]any) (string, error) {
+func (j *JWTService) GenerateAccessToken(userID string, instanceId, email, phone, role string, aal types.AALLevel, amr []string, sessionID uint, userMeta, appMeta map[string]any, scope ...string) (string, error) {
 	secrets := j.getSecrets()
 	if secrets == nil || secrets.PrimaryKeyId == "" {
 		return "", consts.BAD_JWT
@@ -170,6 +172,7 @@ func (j *JWTService) GenerateAccessToken(userID string, instanceId, email, phone
 		Email:      email,
 		Phone:      phone,
 		Role:       role,
+		Scope:      firstScope(scope),
 		AAL:        aal,
 		AMR:        amr,
 		SessionID:  sessionID,
@@ -195,7 +198,7 @@ func (j *JWTService) GenerateAccessToken(userID string, instanceId, email, phone
 }
 
 // GenerateAccessTokenWithExpiry generates a new access token and returns both token and expiry time
-func (j *JWTService) GenerateAccessTokenWithExpiry(userID string, instanceId, email, phone, role string, aal types.AALLevel, amr []string, sessionID uint, userMeta, appMeta map[string]any) (string, int64, error) {
+func (j *JWTService) GenerateAccessTokenWithExpiry(userID string, instanceId, email, phone, role string, aal types.AALLevel, amr []string, sessionID uint, userMeta, appMeta map[string]any, scope ...string) (string, int64, error) {
 	slog.Info("[JWT GenerateAccessTokenWithExpiry] Entry", "userID", userID, "instanceId", instanceId, "sessionID", sessionID)
 	secrets := j.getSecrets()
 	if secrets == nil {
@@ -240,6 +243,7 @@ func (j *JWTService) GenerateAccessTokenWithExpiry(userID string, instanceId, em
 		Email:      email,
 		Phone:      phone,
 		Role:       role,
+		Scope:      firstScope(scope),
 		AAL:        aal,
 		AMR:        amr,
 		SessionID:  sessionID,
@@ -286,6 +290,13 @@ func (j *JWTService) GenerateRefreshToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+func firstScope(scope []string) string {
+	if len(scope) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(scope[0])
 }
 
 // ValidateAccessToken validates and parses an access token

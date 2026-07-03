@@ -371,6 +371,10 @@ func (s *AuthServiceImpl) CreateSessionWithOptions(ctx context.Context, user *Us
 	if tag == "" {
 		tag = SessionTagWeb
 	}
+	sessionMeta, err := sessionMetaJSON(options.SessionMeta)
+	if err != nil {
+		return nil, "", "", 0, err
+	}
 	session := &models.Session{
 		UserID:      user.ID,
 		InstanceId:  s.instanceId,
@@ -381,6 +385,7 @@ func (s *AuthServiceImpl) CreateSessionWithOptions(ctx context.Context, user *Us
 		UserAgent:   &userAgent,
 		IP:          &ip,
 		Tag:         &tag,
+		SessionMeta: sessionMeta,
 	}
 
 	// Set session expiration if time-box is configured
@@ -436,7 +441,7 @@ func (s *AuthServiceImpl) CreateSessionWithOptions(ctx context.Context, user *Us
 		"sessionID", session.ID)
 	accessToken, expiresAt, err := s.jwtService.GenerateAccessTokenWithExpiry(
 		user.HashID, s.instanceId, email, phone, "authenticated",
-		aal, amr, session.ID, userMeta, appMeta,
+		aal, amr, session.ID, userMeta, appMeta, scopeFromSessionMeta(session.SessionMeta),
 	)
 	if err != nil {
 		slog.Error("[CreateSession] GenerateAccessTokenWithExpiry failed", "error", err, "userHashID", user.HashID)
@@ -531,7 +536,7 @@ func (s *AuthServiceImpl) RefreshSession(ctx context.Context, user *User, sessio
 
 	accessToken, expiresAt, err := s.jwtService.GenerateAccessTokenWithExpiry(
 		user.HashID, s.instanceId, email, phone, "authenticated",
-		aal, amr, session.ID, userMeta, appMeta,
+		aal, amr, session.ID, userMeta, appMeta, scopeFromSessionMeta(session.SessionMeta),
 	)
 	if err != nil {
 		return nil, "", "", 0, err
@@ -1325,4 +1330,28 @@ func (s *AuthServiceImpl) ExecuteIdentityLinkedMiddlewares(
 		},
 		"IdentityLinkedUse",
 	)
+}
+
+func sessionMetaJSON(meta map[string]any) (models.JSON, error) {
+	if len(meta) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return nil, err
+	}
+	return models.JSON(raw), nil
+}
+
+func scopeFromSessionMeta(raw models.JSON) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var meta struct {
+		AuthorizedTeamScopes []string `json:"authorized_team_scopes"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return ""
+	}
+	return strings.Join(meta.AuthorizedTeamScopes, " ")
 }
