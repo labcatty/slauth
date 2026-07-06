@@ -441,7 +441,7 @@ func (s *AuthServiceImpl) CreateSessionWithOptions(ctx context.Context, user *Us
 		"sessionID", session.ID)
 	accessToken, expiresAt, err := s.jwtService.GenerateAccessTokenWithExpiry(
 		user.HashID, s.instanceId, email, phone, "authenticated",
-		aal, amr, session.ID, userMeta, appMeta, scopeFromSessionMeta(session.SessionMeta),
+		aal, amr, session.ID, userMeta, appMeta, scopeFromSessionMeta(session.SessionMeta), sessionMetaFromRaw(session.SessionMeta),
 	)
 	if err != nil {
 		slog.Error("[CreateSession] GenerateAccessTokenWithExpiry failed", "error", err, "userHashID", user.HashID)
@@ -536,7 +536,7 @@ func (s *AuthServiceImpl) RefreshSession(ctx context.Context, user *User, sessio
 
 	accessToken, expiresAt, err := s.jwtService.GenerateAccessTokenWithExpiry(
 		user.HashID, s.instanceId, email, phone, "authenticated",
-		aal, amr, session.ID, userMeta, appMeta, scopeFromSessionMeta(session.SessionMeta),
+		aal, amr, session.ID, userMeta, appMeta, scopeFromSessionMeta(session.SessionMeta), sessionMetaFromRaw(session.SessionMeta),
 	)
 	if err != nil {
 		return nil, "", "", 0, err
@@ -1354,4 +1354,15 @@ func scopeFromSessionMeta(raw models.JSON) string {
 		return ""
 	}
 	return strings.Join(meta.AuthorizedTeamScopes, " ")
+}
+
+func sessionMetaFromRaw(raw models.JSON) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	return meta
 }

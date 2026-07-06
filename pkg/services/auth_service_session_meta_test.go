@@ -46,6 +46,7 @@ func TestCreateAndRefreshSessionPreserveTeamScopeFromSessionMeta(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	assertAccessTokenScope(t, accessToken, "team:team_123")
+	assertAccessTokenSessionMeta(t, accessToken, "team_123")
 
 	var stored models.Session
 	if err := db.First(&stored, session.ID).Error; err != nil {
@@ -68,6 +69,7 @@ func TestCreateAndRefreshSessionPreserveTeamScopeFromSessionMeta(t *testing.T) {
 		t.Fatalf("refresh session: %v", err)
 	}
 	assertAccessTokenScope(t, refreshedAccessToken, "team:team_123")
+	assertAccessTokenSessionMeta(t, refreshedAccessToken, "team_123")
 }
 
 func assertAccessTokenScope(t *testing.T, token string, expected string) {
@@ -83,6 +85,26 @@ func assertAccessTokenScope(t *testing.T, token string, expected string) {
 	}
 	if claims["scope"] != expected {
 		t.Fatalf("expected scope %q, got %#v", expected, claims["scope"])
+	}
+}
+
+func assertAccessTokenSessionMeta(t *testing.T, token string, expectedTeam string) {
+	t.Helper()
+	var parser jwt.Parser
+	parsed, _, err := parser.ParseUnverified(token, jwt.MapClaims{})
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	claims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok {
+		t.Fatalf("unexpected claims type %T", parsed.Claims)
+	}
+	meta, ok := claims["session_meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected session_meta claim, got %#v", claims["session_meta"])
+	}
+	if meta["required_team"] != expectedTeam {
+		t.Fatalf("expected session_meta.required_team %q, got %#v", expectedTeam, meta["required_team"])
 	}
 }
 
