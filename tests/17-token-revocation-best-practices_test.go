@@ -648,6 +648,137 @@ func (suite *TokenRevocationBestPracticesTestSuite) TestRefreshTokenReuseInterva
 	suite.Len(uniqueTokens, 1, "refresh token reuse requests should return the same rotated refresh token")
 }
 
+func (suite *TokenRevocationBestPracticesTestSuite) TestRefreshTokenReuseIntervalDisabledRejectsOldToken() {
+	originalInterval := suite.AuthService.GetConfig().SessionConfig.RefreshTokenReuseInterval
+	suite.AuthService.GetConfig().SessionConfig.RefreshTokenReuseInterval = 0
+	defer func() {
+		suite.AuthService.GetConfig().SessionConfig.RefreshTokenReuseInterval = originalInterval
+	}()
+
+	oldRefreshToken := suite.createLoggedInRefreshToken("refresh-reuse-disabled@example.com")
+	firstRefresh := suite.refreshWithToken(oldRefreshToken)
+	suite.Equal(200, firstRefresh.ResponseRecorder.Code, "First refresh should succeed")
+
+	reuseResponse := suite.refreshWithToken(oldRefreshToken)
+	suite.Equal(401, reuseResponse.ResponseRecorder.Code, "Old token should fail when reuse interval is disabled")
+	suite.helper.HasError(suite.T(), reuseResponse, "refresh_token_not_found",
+		"Old refresh token should not be reusable when RefreshTokenReuseInterval is disabled")
+}
+
+func (suite *TokenRevocationBestPracticesTestSuite) TestRefreshTokenReuseIntervalRejectsRevokedTokenWithoutChild() {
+	oldRefreshToken := suite.createLoggedInRefreshToken("refresh-reuse-no-child@example.com")
+	err := suite.AuthService.RevokeRefreshToken(context.Background(), oldRefreshToken)
+	suite.Require().NoError(err)
+
+	reuseResponse := suite.refreshWithToken(oldRefreshToken)
+	suite.Equal(401, reuseResponse.ResponseRecorder.Code, "Revoked token without a rotated child should fail")
+	suite.helper.HasError(suite.T(), reuseResponse, "refresh_token_not_found",
+		"Revoked refresh token should not be reusable when no child token exists")
+}
+
+func (suite *TokenRevocationBestPracticesTestSuite) TestRefreshTokenReturnsSessionExpiredForActiveToken() {
+	refreshToken := suite.createLoggedInRefreshToken("refresh-active-session-expired@example.com")
+	suite.expireSessionForRefreshToken(refreshToken)
+
+	refreshResponse := suite.refreshWithToken(refreshToken)
+	suite.Equal(401, refreshResponse.ResponseRecorder.Code, "Refresh should fail when the active token session is expired")
+	suite.helper.HasError(suite.T(), refreshResponse, "session_expired",
+		"Active refresh token should report session_expired when its session has expired")
+}
+
+func (suite *TokenRevocationBestPracticesTestSuite) TestRefreshTokenReturnsSessionExpiredForReusableChild() {
+	oldRefreshToken := suite.createLoggedInRefreshToken("refresh-child-session-expired@example.com")
+	firstRefresh := suite.refreshWithToken(oldRefreshToken)
+	suite.Equal(200, firstRefresh.ResponseRecorder.Code, "First refresh should succeed")
+
+	suite.expireSessionForRefreshToken(oldRefreshToken)
+
+	reuseResponse := suite.refreshWithToken(oldRefreshToken)
+	suite.Equal(401, reuseResponse.ResponseRecorder.Code, "Reuse should fail when the rotated child's session is expired")
+	suite.helper.HasError(suite.T(), reuseResponse, "session_expired",
+		"Reusable child refresh token should report session_expired when its session has expired")
+}
+
+func (suite *TokenRevocationBestPracticesTestSuite) TestRefreshTokenReturnsExistingChildAndRevokesParent() {
+	oldRefreshToken := suite.createLoggedInRefreshToken("refresh-existing-child@example.com")
+
+	var parent models.RefreshToken
+	err := suite.DB.Where("token = ? AND instance_id = ?", oldRefreshToken, suite.TestInstance).First(&parent).Error
+	suite.Require().NoError(err)
+
+	childToken := "manual-child-" + oldRefreshToken
+	err = suite.DB.Create(&models.RefreshToken{
+		Token:      childToken,
+		UserID:     parent.UserID,
+		SessionID:  parent.SessionID,
+		InstanceId: suite.TestInstance,
+		Revoked:    false,
+		Parent:     &parent.ID,
+	}).Error
+	suite.Require().NoError(err)
+
+	refreshResponse := suite.refreshWithToken(oldRefreshToken)
+	suite.Equal(200, refreshResponse.ResponseRecorder.Code, "Refresh should return the already rotated child token")
+	returnedRefreshToken := refreshTokenFromResponse(suite.T(), refreshResponse)
+	suite.Equal(childToken, returnedRefreshToken, "Refresh should reuse the existing child refresh token")
+
+	var reloadedParent models.RefreshToken
+	err = suite.DB.First(&reloadedParent, parent.ID).Error
+	suite.Require().NoError(err)
+	suite.True(reloadedParent.Revoked, "Parent refresh token should be revoked after returning existing child")
+}
+
+func (suite *TokenRevocationBestPracticesTestSuite) createLoggedInRefreshToken(email string) string {
+	password := "MySecurePassword2024!"
+	suite.helper.MakePOSTRequest(suite.T(), "/auth/signup", S{
+		"email":    email,
+		"password": password,
+	})
+
+	loginResponse := suite.helper.MakePOSTRequest(suite.T(), "/auth/token", S{
+		"grant_type": "password",
+		"email":      email,
+		"password":   password,
+	})
+	suite.Equal(200, loginResponse.ResponseRecorder.Code, "Login should succeed")
+	return refreshTokenFromResponse(suite.T(), loginResponse)
+}
+
+func (suite *TokenRevocationBestPracticesTestSuite) refreshWithToken(refreshToken string) *PinResponse {
+	return suite.helper.MakePOSTRequest(suite.T(), "/auth/token?grant_type=refresh_token", S{
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+	})
+}
+
+func (suite *TokenRevocationBestPracticesTestSuite) expireSessionForRefreshToken(refreshToken string) {
+	var token models.RefreshToken
+	err := suite.DB.Where("token = ? AND instance_id = ?", refreshToken, suite.TestInstance).First(&token).Error
+	suite.Require().NoError(err)
+
+	err = suite.DB.Model(&models.Session{}).
+		Where("id = ?", token.SessionID).
+		Update("not_after", time.Now().Add(-time.Minute)).Error
+	suite.Require().NoError(err)
+}
+
+func refreshTokenFromResponse(t *testing.T, response *PinResponse) string {
+	t.Helper()
+	data, ok := response.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("response data should be an object, got %#v", response.Data)
+	}
+	session, ok := data["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("response session should be an object, got %#v", data["session"])
+	}
+	refreshToken, ok := session["refresh_token"].(string)
+	if !ok || refreshToken == "" {
+		t.Fatalf("response refresh_token should be a non-empty string, got %#v", session["refresh_token"])
+	}
+	return refreshToken
+}
+
 func TestTokenRevocationBestPracticesTestSuite(t *testing.T) {
 	suite.Run(t, new(TokenRevocationBestPracticesTestSuite))
 }
